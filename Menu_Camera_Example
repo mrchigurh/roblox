@@ -75,12 +75,8 @@ end
 function MenuCamera:EnableMenuCamera(tweenTime)
 	if Player:GetAttribute('State') == 'ALIVE' then return end
 	
-	if not game.Workspace.GlobalSounds.MenuSong.Playing then
-		game.Workspace.GlobalSounds.MenuSong:Play()
-	end
-	
-	local function getAngleCFrame(deltaTime)
-		self.Angle = self.Angle + self.PanSpeed * deltaTime
+	local function getAngleCFrame(dt)
+		self.Angle = self.Angle + self.PanSpeed * dt
 		local center = self.FocusObject.Position
 		local x = center.X + self.PanOut * math.cos(self.Angle)
 		local z = center.Z + self.PanOut * math.sin(self.Angle)
@@ -106,11 +102,9 @@ function MenuCamera:EnableMenuCamera(tweenTime)
 end
 
 function MenuCamera:EnableSpectateCamera()
-	-- disable other cameras.
 	if self.MoveConnection then
 		self.MoveConnection:Disconnect()
 	end
-	-- find first player to spectate
 	self:SpectateNextPlayer('Right')
 end
 
@@ -150,14 +144,13 @@ function MenuCamera:SpectateNextPlayer(posDirection)
 	
 	self.SpectatingPlayer = currentSpectatedPlayer
 	spectateGuiHolder.playerCamerasFrame.Text.Text = string.upper(currentSpectatedPlayer.Name)
-	-- tween to player
+
 	self:TweenCamera(spectatedPlayerChar.PrimaryPart.CFrame * CFrame.new(0,0,17), 1)
 	Camera.CameraSubject = spectatedPlayerChar.PrimaryPart
 	Camera.CameraType = Enum.CameraType.Follow
 end
 
 function MenuCamera:EnableLeaderboardCamera()
-	-- tween to leaderboard camera in workspace
 	self:TweenCamera(LeaderboardObject.CFrame)
 end
 
@@ -177,8 +170,6 @@ function MenuCamera:TweenCamera(desiredCFrame, tweenTime)
 end
 
 function MenuCamera:Disable()
-	game.Workspace.GlobalSounds.MenuSong.Volume = .5
-	game.Workspace.GlobalSounds.MenuSong:Stop()
 	self.MoveConnection:Disconnect()
 	self.CameraTypePosition = 0
 	if self.CameraTween ~= nil then
