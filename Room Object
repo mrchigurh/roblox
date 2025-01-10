@@ -1,0 +1,238 @@
+local Room = {}
+Room.__index = Room
+
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local ServerScriptService = game:GetService('ServerScriptService')
+local TweenService = game:GetService("TweenService")
+local Zone = ReplicatedStorage.Modules.Shared.Zone
+local Weld = ReplicatedStorage.Modules.Shared.WeldModel
+
+local roomAssetsDirectory = ReplicatedStorage:WaitForChild('Assets').RoomAssets
+local roomZonesDirectory = game.Workspace:WaitForChild('RoomZones')
+local gameInfoDirectory = ReplicatedStorage:WaitForChild('GameInfo').Mingle
+local doorOpenTweenInfo = TweenInfo.new(
+	.5,
+	Enum.EasingStyle.Quad,
+	Enum.EasingDirection.Out
+)
+local soundsDirectory = ReplicatedStorage:WaitForChild('Assets').Sounds
+local doorOpenSound = soundsDirectory.DoorOpen
+local doorCloseSound = soundsDirectory.DoorSlam
+
+local roomScreen = roomAssetsDirectory:WaitForChild('RoomScreen')
+local roomLight = roomAssetsDirectory:WaitForChild('RoomLight')
+local unlockProxPart = roomAssetsDirectory:WaitForChild('ProxPromptPart')
+
+
+function Room.new(instance)
+	local self = setmetatable({
+		['Instance'] = instance,
+		DoorNumber = string.gsub(instance.Name, "%D+", ""),
+		Door = nil,
+		Occupiers = {},
+		Locked = false,
+		GameLocked = false,
+		Zone = nil,
+		DoorOpenCFrame = nil,
+		DoorClosedCFrame = nil,
+		RoomScreen = nil, 
+		UnlockProxPart = nil,
+		UnlockProxPartCooldown = 1.5,
+		CurrentProxPartCooldown = -1,
+		DoorOpenSound = doorOpenSound:Clone(),
+		DoorCloseSound = doorCloseSound:Clone(),
+		_connections = {}
+	}, Room)
+
+	self:init()
+	
+	return self
+end
+
+function Room:init()
+	
+	local function setupRoom()
+		local pseudoPart = Instance.new('Part')
+		local cframe, size = self.Instance:GetBoundingBox()
+		local zonePart = Instance.new('Part')
+		local roomScreen = roomScreen:Clone()
+		local roomLight = roomLight:Clone()
+		local unlockProxPart = unlockProxPart:Clone()
+		
+		self.UnlockProxPart = unlockProxPart
+		self.RoomScreen = roomScreen
+		self.RoomLight = roomLight
+		
+		self.RoomLight:SetAttribute('DefaultColor', roomLight.PointLight.Color)
+		
+		pseudoPart.Anchored = true
+		pseudoPart.Size = Vector3.new(1,1,1)
+		pseudoPart.CFrame = cframe
+		pseudoPart.Name = 'PseudoCenter'
+		pseudoPart.Transparency = 1
+		pseudoPart.Parent = self.Instance
+		
+		zonePart.Size = size + Vector3.new(-2,0,0)
+		zonePart.Transparency = 1
+		zonePart.CanCollide = false
+		zonePart.Color = Color3.fromRGB(255,0,0)
+		zonePart.Anchored = true
+		zonePart.CFrame = cframe * CFrame.new(0,0,2)
+		zonePart.Name = 'ZoneHitbox'
+		zonePart.Parent = self.Instance
+		
+		roomScreen.Parent = self.Instance
+		roomScreen.CFrame = pseudoPart.CFrame * CFrame.new(.15,.15,6.15)
+		
+		roomLight.Parent = self.Instance
+		roomLight.CFrame = pseudoPart.CFrame * CFrame.new(0,1,0)
+		
+		unlockProxPart.Parent = self.Instance
+		unlockProxPart.CFrame = pseudoPart.CFrame * CFrame.new(0,-3.5,6)
+		
+		self.Instance.Model:Destroy()
+		
+		unlockProxPart.ProximityPrompt.Triggered:Connect(function(player)
+			if not table.find(self.Occupiers, player) then return end
+			if os.time() < self.CurrentProxPartCooldown then return end
+			if player:GetAttribute('State') ~= 'ALIVE' then return end
+			if self.GameLocked then return end
+			
+			self.CurrentProxPartCooldown = os.time() + self.UnlockProxPartCooldown
+			self:ToggleDoor(nil, true)
+		end)
+	end
+	
+	local function setupZones()
+		local doorNumber = self.DoorNumber
+		local connections = self._connections
+		self.Zone = Zone.new(self.Instance.ZoneHitbox)
+		--self.Instance.DoorNumberPart.SurfaceGui.TextLabel.Text = `ROOM-{doorNumber}`
+		
+		local function evaluateRoomLight()
+			local calloutNum = gameInfoDirectory.RoundState.CalloutNumber
+			if #self.Occupiers == 0 then
+				self.RoomLight.PointLight.Color = self.RoomLight:GetAttribute('DefaultColor')
+			elseif #self.Occupiers > calloutNum.Value or #self.Occupiers < calloutNum.Value then
+				self.RoomLight.PointLight.Color = Color3.fromRGB(145, 0, 0)
+			else
+				self.RoomLight.PointLight.Color = Color3.fromRGB(0, 211, 18)
+			end
+		end
+
+		connections[#connections + 1] = self.Zone.playerEntered:Connect(function(player)
+			if self.Locked then return warn(self.Locked) end
+			table.insert(self.Occupiers, player)
+			player:SetAttribute('OccupiedRoom', doorNumber)
+			self.RoomScreen.SurfaceGui.BlackScreen.CurrentPlayers.Text = #self.Occupiers
+			evaluateRoomLight()
+		end)
+
+		connections[#connections + 1] = self.Zone.playerExited:Connect(function(player)
+			print(("%s exited the zone!"):format(player.Name))
+			table.remove(self.Occupiers, table.find(self.Occupiers, player))
+			player:SetAttribute('OccupiedRoom', nil)
+			self.RoomScreen.SurfaceGui.BlackScreen.CurrentPlayers.Text = #self.Occupiers
+			evaluateRoomLight()
+		end)
+	end
+	
+	local function setupDoor()
+		self.Door = self.Instance[`Door #{self.DoorNumber}`]
+		self.Door.PrimaryPart = self.Door.Hinges
+		self.DoorOpenCFrame = self.Door.PrimaryPart.CFrame
+		self.DoorClosedCFrame = self.Door.PrimaryPart.CFrame * CFrame.Angles(math.rad(110), 0, 0)
+		self.DoorOpenSound.Parent = self.Instance
+		self.DoorCloseSound.Parent = self.Instance
+		
+		Weld.WeldModelToPrimaryPart(self.Door)
+	end
+	
+	gameInfoDirectory.RoundState.CalloutNumber:GetPropertyChangedSignal('Value'):Connect(function()
+		local value = gameInfoDirectory.RoundState.CalloutNumber.Value
+		if value == -1 then return end
+		self.RoomScreen.SurfaceGui.BlackScreen.MaxPlayers.Text = value
+	end)
+	
+	setupRoom()
+	setupDoor()
+	setupZones()
+end
+
+function Room:ToggleDoor(forcedState : boolean, isButtonCalled, dontPlaySound)
+	if isButtonCalled == nil then isButtonCalled = false end
+	local state
+	
+	local function animateDoor()
+		local doorHinge = self.Door.PrimaryPart
+		local rotateAmount = self.RotateAmount
+		local desDoorCFrame
+		
+		if not self.Locked then
+			desDoorCFrame = self.DoorClosedCFrame
+		else
+			desDoorCFrame = self.DoorOpenCFrame
+		end
+		
+		local tween = TweenService:Create(doorHinge, doorOpenTweenInfo, {['CFrame'] = desDoorCFrame})
+		tween:Play()
+	end
+	
+	local function evaluateState()
+		
+		if isButtonCalled and self.GameLocked then
+			self.Locked = true
+			warn('GAME_LOCKED')
+			return 'GAME_LOCKED'
+		end
+		
+		if forcedState ~= nil then
+			self.Locked = forcedState
+		else
+			self.Locked = not self.Locked
+		end
+	end
+	
+	local function playDoorSound()
+		
+		if not self.Locked then
+			self.DoorOpenSound:Play()
+		else
+			self.DoorCloseSound:Play()
+		end
+	
+	end
+	
+	evaluateState()
+	animateDoor()
+
+	if not dontPlaySound then
+		playDoorSound()
+	end
+end
+
+function Room:KillOccupants(killMethod)
+	if killMethod == nil then killMethod = 'DEFAULT' end
+	for _, occupant in self.Occupiers do
+		occupant.Character:DisableJoints()
+		print(`{occupant.Name} killed`)
+	end
+end
+
+function Room.RemoveOccupant(occupier : Player, forcedPosition : Vector3)
+	print('removed occupant')
+end
+
+function Room:Disable()
+	local connections = self._connections
+	for i = 1, #connections do
+		local connection = connections[i]
+		connection:Disconnect()
+	end
+	
+	for _, occupier in self.Occupiers do
+		self.RemoveOccupant(occupier)
+	end
+end
+
+return Room
