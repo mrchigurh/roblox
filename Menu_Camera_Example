@@ -1,0 +1,191 @@
+local MenuCamera = {}
+MenuCamera.__index = MenuCamera
+
+local Players = game:GetService('Players')
+local Player = game.Players.LocalPlayer
+local RunService = game:GetService('RunService')
+local MenuCameras = game.Workspace:WaitForChild('MenuCameras')
+local CenterFocusObject = MenuCameras:WaitForChild('CenterCamFocus')
+local LeaderboardObject = MenuCameras:WaitForChild('Leaderboard')
+local TweenService = game:GetService('TweenService')
+local Camera = workspace.CurrentCamera
+local PlayerGui = Player.PlayerGui
+
+local spectateGui = Player.PlayerGui:WaitForChild('SpectateMenu')
+local spectateGuiHolder = spectateGui.Holder
+local globalCamerasFrame = spectateGuiHolder.globalCamerasFrame
+local playerCamerasFrame = spectateGuiHolder.playerCamerasFrame
+
+
+MenuCamera.CameraTypes = {
+	[1] = 'Menu',
+	[2] = 'Spectate',
+	[3] = 'Leaderboard'
+}
+
+function MenuCamera.new()
+	local self = setmetatable({
+		Enabled = false,
+		CameraType = nil,
+		CameraTypePosition = 0,
+		SpectatingPlayerPosition = 0,
+		PanSpeed = .2,
+		PanOut = 45,
+		PanHeight = 30,
+		FocusObject = CenterFocusObject,
+		Angle = 0,
+		SpectatingPlayer = nil,
+		MoveConnection = nil,
+		CameraTween = nil
+	}, MenuCamera)
+	
+	return self
+end
+
+function MenuCamera:init()
+	MenuCamera:Enable()
+end
+
+function MenuCamera:TransitionNextCamera(posDirection)
+	local currentCameraPosition = self.CameraTypePosition
+	local currentCameraType
+	
+	if currentCameraPosition == 0 or currentCameraPosition == #MenuCamera.CameraTypes and posDirection == 'Right' then
+		self.CameraTypePosition = 1
+	elseif currentCameraPosition == 1 and posDirection == 'Left' then
+		self.CameraTypePosition = #MenuCamera.CameraTypes
+	elseif posDirection == 'Left' then
+		self.CameraTypePosition -= 1
+	elseif posDirection == 'Right' then
+		self.CameraTypePosition += 1
+	end
+	
+	currentCameraType = MenuCamera.CameraTypes[self.CameraTypePosition]
+	globalCamerasFrame.Text.Text = string.upper(currentCameraType)
+	
+	if currentCameraType ~= 'Spectate' then
+		playerCamerasFrame.Visible = false
+	else
+		playerCamerasFrame.Visible = true
+	end
+	
+	MenuCamera[`Enable{currentCameraType}Camera`](self)
+end
+
+function MenuCamera:EnableMenuCamera(tweenTime)
+	if Player:GetAttribute('State') == 'ALIVE' then return end
+	
+	if not game.Workspace.GlobalSounds.MenuSong.Playing then
+		game.Workspace.GlobalSounds.MenuSong:Play()
+	end
+	
+	local function getAngleCFrame(deltaTime)
+		self.Angle = self.Angle + self.PanSpeed * deltaTime
+		local center = self.FocusObject.Position
+		local x = center.X + self.PanOut * math.cos(self.Angle)
+		local z = center.Z + self.PanOut * math.sin(self.Angle)
+		local y = center.Y + self.PanHeight
+		return CFrame.new(Vector3.new(x, y, z), center)
+	end
+	
+	local function setupCamera()
+		Camera.CameraType = Enum.CameraType.Scriptable
+		
+		if self.MoveConnection ~= nil then
+			self.MoveConnection:Disconnect()
+		end
+		
+		self.MoveConnection = RunService.RenderStepped:Connect(function(deltaTime)
+			Camera.CFrame = getAngleCFrame(deltaTime)
+		end)
+	end
+	
+	spectateGuiHolder.globalCamerasFrame.Text.Text = 'MENU'
+	self:TweenCamera(getAngleCFrame(1), tweenTime)
+	setupCamera()
+end
+
+function MenuCamera:EnableSpectateCamera()
+	-- disable other cameras.
+	if self.MoveConnection then
+		self.MoveConnection:Disconnect()
+	end
+	-- find first player to spectate
+	self:SpectateNextPlayer('Right')
+end
+
+function MenuCamera:SpectateNextPlayer(posDirection)
+	local currentCameraPosition = self.SpectatingPlayerPosition
+	local currentCameraType
+	local currentPlayers = Players:GetPlayers()
+	local currentSpectatedPlayer
+	local spectatedPlayerChar
+	
+	table.remove(currentPlayers, table.find(currentPlayers, Player))
+	
+	for _, plr in currentPlayers do
+		if plr:GetAttribute('State') == 'LOBBY' then
+			table.remove(currentPlayers, table.find(currentPlayers, plr))
+		end
+	end
+	
+	if #currentPlayers == 0 then return end
+	
+	if currentCameraPosition == 0 or currentCameraPosition == #currentPlayers and posDirection == 'Right' then
+		self.SpectatingPlayerPosition = 1
+	elseif currentCameraPosition == 1 and posDirection == 'Left' then
+		self.SpectatingPlayerPosition = #MenuCamera.CameraTypes
+	elseif posDirection == 'Left' then
+		self.SpectatingPlayerPosition -= 1
+	elseif posDirection == 'Right' then
+		self.SpectatingPlayerPosition += 1
+	end
+	
+	currentSpectatedPlayer = currentPlayers[self.SpectatingPlayerPosition]
+	spectatedPlayerChar = currentSpectatedPlayer.Character
+	
+	if self.SpectatingPlayer == currentSpectatedPlayer then
+		return
+	end
+	
+	self.SpectatingPlayer = currentSpectatedPlayer
+	spectateGuiHolder.playerCamerasFrame.Text.Text = string.upper(currentSpectatedPlayer.Name)
+	-- tween to player
+	self:TweenCamera(spectatedPlayerChar.PrimaryPart.CFrame * CFrame.new(0,0,17), 1)
+	Camera.CameraSubject = spectatedPlayerChar.PrimaryPart
+	Camera.CameraType = Enum.CameraType.Follow
+end
+
+function MenuCamera:EnableLeaderboardCamera()
+	-- tween to leaderboard camera in workspace
+	self:TweenCamera(LeaderboardObject.CFrame)
+end
+
+function MenuCamera:TweenCamera(desiredCFrame, tweenTime)
+	if self.CameraTween ~= nil then self.CameraTween:Pause() ; self.CameraTween = nil end
+	if tweenTime == nil then tweenTime = 1.5 end
+	Camera.CameraType = Enum.CameraType.Scriptable
+	if self.MoveConnection then
+		self.MoveConnection:Disconnect()
+	end
+	
+	local newTween = TweenService:Create(Camera, TweenInfo.new(tweenTime), {['CFrame'] = desiredCFrame})
+	self.CameraTween = newTween
+	newTween:Play()
+	newTween.Completed:Wait()
+	Camera.CFrame = desiredCFrame
+end
+
+function MenuCamera:Disable()
+	game.Workspace.GlobalSounds.MenuSong.Volume = .5
+	game.Workspace.GlobalSounds.MenuSong:Stop()
+	self.MoveConnection:Disconnect()
+	self.CameraTypePosition = 0
+	if self.CameraTween ~= nil then
+		self.CameraTween:Pause()
+		self.CameraTween = nil
+	end
+	Camera.CameraType = Enum.CameraType.Custom
+end
+
+return MenuCamera
